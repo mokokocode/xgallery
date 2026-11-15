@@ -11,6 +11,8 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.wifi.WifiNetworkSpecifier;
+import android.os.PatternMatcher;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -40,7 +42,7 @@ import app.xgallery.ptp.ObjectInfo;
  */
 public final class MainActivity extends Activity {
 
-	private static final String VERSION = "0.1 (step 1: connection test)";
+	private static final String VERSION = "0.2 (step 1: connection test)";
 	private static final String CLIENT_NAME = "XGallery";
 	private static final int THUMBS_TO_TEST = 10;
 
@@ -66,9 +68,7 @@ public final class MainActivity extends Activity {
 		getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 		setContentView(buildLayout());
 		setStatus("1. On the camera, start WIRELESS COMMUNICATION.\n"
-				+ "2. In Android Wi-Fi settings, join the camera's network (FUJIFILM-...). "
-				+ "If the phone warns there is no internet, choose to stay connected.\n"
-				+ "3. Come back here and tap Connect.");
+				+ "2. Tap Connect and pick the camera's network (FUJIFILM-...) in the dialog.");
 	}
 
 	@Override
@@ -182,10 +182,19 @@ public final class MainActivity extends Activity {
 
 		// Ask for the Wi-Fi network even though it has no internet access. Sockets created from it
 		// stay on the camera's network instead of being routed over mobile data.
+		// Ask Android to join the camera's own network (SSIDs start with "FUJIFILM-"). Android shows a
+		// dialog listing matching networks; the app then gets a connection to that network only, so it
+		// can't end up talking to the home Wi-Fi instead.
+		WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
+				.setSsidPattern(new PatternMatcher("FUJIFILM-", PatternMatcher.PATTERN_PREFIX))
+				.build();
 		NetworkRequest request = new NetworkRequest.Builder()
 				.addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
 				.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+				.setNetworkSpecifier(specifier)
 				.build();
+		log("Requesting a FUJIFILM-... Wi-Fi network");
+		setStatus("Pick the camera's network (FUJIFILM-...) in the dialog that appears.");
 		final AtomicBoolean started = new AtomicBoolean(false);
 		networkCallback = new ConnectivityManager.NetworkCallback() {
 			@Override
@@ -197,9 +206,10 @@ public final class MainActivity extends Activity {
 			@Override
 			public void onUnavailable() {
 				if (!started.compareAndSet(false, true)) return;
-				log("No Wi-Fi network available.");
-				finish("FAILED: the phone is not connected to Wi-Fi. Join the camera's FUJIFILM-... "
-						+ "network in Android settings, then tap Connect again.");
+				log("Android did not connect to a FUJIFILM-... network (no match found, dialog cancelled, "
+						+ "or timed out).");
+				finish("FAILED: couldn't join the camera's Wi-Fi. Make sure WIRELESS COMMUNICATION is "
+						+ "running on the camera, then tap Connect and pick the FUJIFILM-... network.");
 			}
 
 			@Override
@@ -208,7 +218,8 @@ public final class MainActivity extends Activity {
 			}
 		};
 		try {
-			connectivity.requestNetwork(request, networkCallback, 15000);
+			// Long timeout: it includes the time the user takes to answer the dialog
+			connectivity.requestNetwork(request, networkCallback, 60000);
 		} catch (RuntimeException e) {
 			log("requestNetwork failed: " + e);
 			finish("FAILED: could not ask Android for the Wi-Fi network (" + e.getMessage() + ")");
